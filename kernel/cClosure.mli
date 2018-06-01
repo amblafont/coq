@@ -156,6 +156,12 @@ type stack_member =
   | Zfix of fconstr * stack
   | Zshift of int
   | Zupdate of fconstr
+  (* The first argument is the topmost symbol K which needs to be saved
+     in order to rebuild the whole term in [zip_term] (for strong normalization)
+     The second argument is the list of arguments of K before the equality argument
+  *)
+  | ZK of fconstr * stack
+  | Zrew of fconstr * rewrite_rule *stack
 
 and stack = stack_member list
 

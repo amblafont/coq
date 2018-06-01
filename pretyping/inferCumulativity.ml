@@ -150,6 +150,12 @@ and infer_stack infos variances (stk:CClosure.stack) =
       | Zfix (fx,a) ->
         let variances = infer_fterm CONV infos variances fx [] in
         infer_stack infos variances a
+      | ZK (fx,a) ->
+        let variances = infer_fterm CONV infos variances fx [] in
+        infer_stack infos variances a
+      | Zrew (fx,_,a) ->
+        let variances = infer_fterm CONV infos variances fx [] in
+        infer_stack infos variances a
       | ZcaseT (ci,p,br,e) ->
         let variances = infer_fterm CONV infos variances (mk_clos e p) [] in
         infer_vect infos variances (Array.map (mk_clos e) br)

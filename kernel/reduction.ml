@@ -59,8 +59,12 @@ let compare_stack_shape stk1 stk2 =
         Int.equal bal 0 (* && c1.ci_ind  = c2.ci_ind *) && compare_rec 0 s1 s2
     | (Zfix(_,a1)::s1, Zfix(_,a2)::s2) ->
         Int.equal bal 0 && compare_rec 0 a1 a2 && compare_rec 0 s1 s2
+    | (ZK(_,a1)::s1, ZK(_,a2)::s2) ->
+        Int.equal bal 0 && compare_rec 0 a1 a2 && compare_rec 0 s1 s2
+    | (Zrew(_,_,a1)::s1, Zrew(_,_,a2)::s2) ->
+        Int.equal bal 0 && compare_rec 0 a1 a2 && compare_rec 0 s1 s2
     | [], _ :: _
-    | (Zproj _ | ZcaseT _ | Zfix _) :: _, _ -> false
+    | (Zproj _ | ZcaseT _ | Zfix _ | ZK _ | Zrew _) :: _, _ -> false
   in
   compare_rec 0 stk1 stk2
 
@@ -68,6 +72,8 @@ type lft_constr_stack_elt =
     Zlapp of (lift * fconstr) array
   | Zlproj of Constant.t * lift
   | Zlfix of (lift * fconstr) * lft_constr_stack
+  | ZlK of (lift * fconstr) * lft_constr_stack
+  | Zlrew of (lift * fconstr) * lft_constr_stack
   | Zlcase of case_info * lift * fconstr * fconstr array
 and lft_constr_stack = lft_constr_stack_elt list
 
@@ -101,6 +107,12 @@ let pure_stack lfts stk =
             | (Zfix(fx,a),(l,pstk)) ->
                 let (lfx,pa) = pure_rec l a in
                 (l, Zlfix((lfx,fx),pa)::pstk)
+            | (ZK(fx,a),(l,pstk)) ->
+                let (lfx,pa) = pure_rec l a in
+                (l, ZlK((lfx,fx),pa)::pstk)
+            | (Zrew(fx,_,a),(l,pstk)) ->
+                let (lfx,pa) = pure_rec l a in
+                (l, Zlrew((lfx,fx),pa)::pstk)
             | (ZcaseT(ci,p,br,e),(l,pstk)) ->
                 (l,Zlcase(ci,l,mk_clos e p,Array.map (mk_clos e) br)::pstk))
   in

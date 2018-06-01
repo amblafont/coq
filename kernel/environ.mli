@@ -68,6 +68,18 @@ type rel_context_val = private {
   env_rel_map : (Context.Rel.Declaration.t * lazy_val) Range.t;
 }
 
+type rewrite_rule = {
+  (* env_rew_cst : string ; *)
+  (* number of arguments. The last one should be of an inductive datatype that
+     we will match on
+  *)
+  env_rew_nb_args : int;
+
+  env_arg_rules : (int * Constr.constr) Cmap_env.t;
+  (* env_rew_reduced : constr array ; *)
+}
+val rewrule_lookup_tm_nb : Names.Cmap_env.key -> rewrite_rule -> (int * Constr.constr)
+
 type env = private {
   env_globals       : globals;           (* globals = constants + inductive types + modules + module-types *)
   env_named_context : named_context_val; (* section variables *)
@@ -75,6 +87,7 @@ type env = private {
   env_nb_rel        : int;
   env_stratification : stratification;
   env_typing_flags  : typing_flags;
+  env_rewrite_rules : rewrite_rule Cmap_env.t;
   retroknowledge : Retroknowledge.retroknowledge;
   indirect_pterms : Opaqueproof.opaquetab;
 }
@@ -143,6 +156,7 @@ val push_named_context_val  :
     Context.Named.Declaration.t -> named_context_val -> named_context_val
 
 
+val lookup_rewrule : Names.Constant.t -> env -> rewrite_rule
 
 (** Looks up in the context of local vars referred by names ([named_context]) 
    raises [Not_found] if the Id.t is not found *)

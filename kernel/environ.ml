@@ -84,6 +84,31 @@ type rel_context_val = {
   env_rel_map : (Context.Rel.Declaration.t * lazy_val) Range.t;
 }
 
+(*
+   A rewrite rule is of the form:
+   C a1 a2 .. an (C' b1 ..  bn) -> P a1 a2 .. an b1 .. bn
+   where C and C' are constants (even : axioms)
+
+*)
+type rewrite_rule = {
+  (* env_rew_cst : string ; *)
+  (* number of arguments. The last one should be of an inductive datatype that
+     we will match on
+  *)
+  env_rew_nb_args : int;
+  (*
+     reduced terms for each constructor
+     Should I put a list ?
+*)
+  env_arg_rules : (int * Constr.constr) Cmap_env.t;
+}
+(* type rewrite_rule_item = Constr.constr * Constr.constr * int * int *)
+
+let rewrule_lookup_tm_nb id rew =
+  Cmap_env.find id rew.env_arg_rules
+
+
+
 type env = {
   env_globals       : globals;           (* globals = constants + inductive types + modules + module-types *)
   env_named_context : named_context_val; (* section variables *)
@@ -91,6 +116,7 @@ type env = {
   env_nb_rel        : int;
   env_stratification : stratification;
   env_typing_flags  : typing_flags;
+  env_rewrite_rules : rewrite_rule Cmap_env.t;
   retroknowledge : Retroknowledge.retroknowledge;
   indirect_pterms : Opaqueproof.opaquetab;
 }
@@ -118,6 +144,7 @@ let empty_env = {
     env_universes = UGraph.initial_universes;
     env_engagement = PredicativeSet };
   env_typing_flags = Declareops.safe_flags Conv_oracle.empty;
+  env_rewrite_rules = Cmap_env.empty;
   retroknowledge = Retroknowledge.initial_retroknowledge;
   indirect_pterms = Opaqueproof.empty_opaquetab }
 
@@ -197,6 +224,8 @@ let map_named_val f ctxt =
 let push_named d env =
   {env with env_named_context = push_named_context_val d env.env_named_context}
 
+let lookup_rewrule id env =
+  Cmap_env.find id env.env_rewrite_rules
 let lookup_named id env =
   fst (Id.Map.find id env.env_named_context.env_named_map)
 

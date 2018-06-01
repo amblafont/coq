@@ -401,6 +401,16 @@ type stack_member =
   | Zfix of fconstr * stack
   | Zshift of int
   | Zupdate of fconstr
+  (* The first argument is the topmost symbol K which needs to be saved
+     in order to rebuild the whole term in [zip_term] (for strong normalization)
+     The second argument is the list of arguments of K before the equality argument
+  *)
+  | ZK of fconstr * stack
+  (* The first argument is the topmost symbol K which needs to be saved
+     in order to rebuild the whole term in [zip_term] (for strong normalization)
+     The second argument is the associated rewrite rule
+  *)
+  | Zrew of fconstr * rewrite_rule * stack
 
 and stack = stack_member list
 
@@ -678,6 +688,10 @@ let rec zip m stk =
         zip {norm=neutr m.norm; term=FProj(Projection.make cst true,m)} s
     | Zfix(fx,par)::s ->
         zip fx (par @ append_stack [|m|] s)
+    | ZK(fx,par)::s ->
+        zip fx (par @ append_stack [|m|] s)
+    | Zrew(fx,_,par)::s ->
+        zip fx (par @ append_stack [|m|] s)
     | Zshift(n)::s ->
         zip (lift_fconstr n m) s
     | Zupdate(rf)::s ->
@@ -709,6 +723,11 @@ let strip_update_shift_app head stack =
   assert (match head.norm with Red -> false | _ -> true);
   strip_update_shift_app_red head stack
 
+(*
+   If returns [Some (pars, arg), s'], then arg is the nth argument,
+   pars is the list of arguments before arg, and s' the rest of the
+   stack
+*)
 let get_nth_arg head n stk =
   assert (match head.norm with Red -> false | _ -> true);
   let rec strip_rec rstk h n = function
@@ -753,7 +772,7 @@ let rec get_args n tys f e stk =
 
 (* Eta expansion: add a reference to implicit surrounding lambda at end of stack *)
 let rec eta_expand_stack = function
-  | (Zapp _ | Zfix _ | ZcaseT _ | Zproj _
+  | (Zapp _ | Zfix _ | ZcaseT _ | Zproj _ | ZK _ | Zrew _
 	| Zshift _ | Zupdate _ as e) :: s ->
       e :: eta_expand_stack s
   | [] ->
@@ -853,6 +872,24 @@ let contract_fix_vect fix =
   in
   (subs_cons(Array.init nfix make_body, env), thisbody)
 
+(* K A x eq_refl = (fun A x  => eq_refl (x=x) eq_refl  ) A x )
+   eq_refl (2=2) 1
+*)
+  (* ind: inductive corresponding to equality *)
+let contract_K ind u =
+  let eq_refl = Constr.mkConstruct (ind,1) in
+  let eq_refl_t a x = Constr.mkApp(eq_refl , [| a ; x |]) in
+  let a = Constr.mkRel 2 in
+  let x = Constr.mkRel 1 in
+  let eq t a b = Constr.mkApp (Constr.mkInd ind, [| t ; a ; b |] ) in
+  ( Esubst.subs_id 2,
+    (* TODO : trouver ce qu'il faut mettre à la place de type0 *)
+    Constr.mkLambda (Name.mk_name (Id.of_string "A"), Constr.mkType Univ.Universe.type0 ,
+    Constr.mkLambda(Name.mk_name (Id.of_string "x"), Constr.mkRel 1 ,
+                    eq_refl_t
+                      (eq a x x)
+                      (eq_refl_t a x))))
+
 let unfold_projection info p =
   if red_projection info.i_flags p
   then
@@ -878,6 +915,33 @@ let rec knh info m stk =
              (Some(pars,arg),stk') -> knh info arg (Zfix(m,pars)::stk')
            | (None, stk') -> (m,stk'))
     | FCast(t,_,_) -> knh info t stk
+    | FFlex(ConstKey (kn,_ )) when Label.to_string (Constant.label kn) = "def_K" ->
+        (* THINK TODO
+           I don't know why I need set_norm here before get_nth_arg, whereas the Fix case does not need it*)
+        (
+        set_norm m;
+        (match get_nth_arg m 2 stk with
+           (Some(pars,arg),stk') ->
+           (* print_endline "knh!"; *)
+           knh info arg (ZK(m,pars)::stk')
+         | (None, stk') ->
+           (* print_endline "ohhh"; *)
+           (* I am not sure of stk' : stk instead ? *)
+           (m,stk'))
+        )
+    (* | FFlex(ConstKey (kn,_ )) when Label.to_string (Constant.label kn) = "def_K" -> *)
+    | FFlex(ConstKey (kn,_ )) ->
+      (match Environ.lookup_rewrule kn (info_env info)
+       with exception Not_found -> (m , stk)
+       | rew_rule ->
+         set_norm m ;
+         (match get_nth_arg m rew_rule.env_rew_nb_args stk with
+           (Some(pars,arg),stk') ->
+           knh info arg (Zrew(m, rew_rule,pars)::stk')
+         | (None, stk') ->
+           (* I am not sure of stk' : stk instead ? *)
+           (m,stk'))
+      )
     | FProj (p,c) ->
       (match unfold_projection info p with
        | None -> (m, stk)
@@ -896,6 +960,8 @@ and knht info e t stk =
     | Case(ci,p,t,br) ->
         knht info e t (ZcaseT(ci, p, br, e)::stk)
     | Fix _ -> knh info (mk_clos2 e t) stk
+    | Const (c, _) when Label.to_string (Constant.label c) = "def_K" -> knh info (mk_clos2 e t) stk
+    (* TODO : the same for rewrite rules *)
     | Cast(a,_,_) -> knht info e a stk
     | Rel n -> knh info (clos_rel e n) stk
     | Proj (p,c) -> knh info (mk_clos2 e t) stk
@@ -913,10 +979,33 @@ let rec knr info tab m stk =
       (match get_args n tys f e stk with
           Inl e', s -> knit info tab e' f s
         | Inr lam, s -> (lam,s))
-  | FFlex(ConstKey (kn,_ as c)) when red_set info.i_flags (fCONST kn) ->
-      (match ref_value_cache info tab (ConstKey c) with
-          Some v -> kni info tab v stk
-        | None -> (set_norm m; (m,stk)))
+  | FFlex(ConstKey (kn,_ as c)) ->
+    if red_set info.i_flags (fCONST kn) then
+      (
+    (match ref_value_cache info tab (ConstKey c) with
+       Some v ->
+       kni info tab v stk
+     | None -> (set_norm m; (m,stk)))
+    )
+    else
+      (
+        (* set_norm m ; (\* TODO : I think this set_norm should not be there ... *\) *)
+        (* I use the '_red' version because the usual one fails for the assert *)
+      (match strip_update_shift_app_red m stk with
+        | (depth, cargs, (Zrew(_,rew,par)::s )) ->
+          (
+          match Environ.rewrule_lookup_tm_nb kn rew with
+          exception Not_found -> (m , stk)
+          | n , tm ->
+           (* TODO : optimize this append_stack nothing *)
+            let stk' = par @ append_stack [| |] s in
+            let (ke,kbd) = (Esubst.subs_id (n+rew.env_rew_nb_args)), tm  in
+            knit info tab ke kbd stk'
+              )
+        | _ -> (m , stk)))
+
+
+
   | FFlex(VarKey id) when red_set info.i_flags (fVAR id) ->
       (match ref_value_cache info tab (VarKey id) with
           Some v -> kni info tab v stk
@@ -935,14 +1024,19 @@ let rec knr info tab m stk =
             let rargs = drop_parameters depth ci.ci_npar args in
             knit info tab e br.(c-1) (rargs@s)
         | (_, cargs, Zfix(fx,par)::s) when use_fix ->
+          (* Fix fx par m := .. *)
             let rarg = fapp_stack(m,cargs) in
             let stk' = par @ append_stack [|rarg|] s in
             let (fxe,fxbd) = contract_fix_vect fx.term in
             knit info tab fxe fxbd stk'
-	| (depth, args, Zproj (n, m, cst)::s) when use_match ->
-	    let rargs = drop_parameters depth n args in
-	    let rarg = project_nth_arg m rargs in
-            kni info tab rarg s
+        | (depth, cargs, (ZK(_,par)::s )) ->
+            let stk' = par @ append_stack [| |] s in
+            let (ke,kbd) = contract_K ind u in
+            knit info tab ke kbd stk'
+        | (depth, args, Zproj (n, m, cst)::s) when use_match ->
+          let rargs = drop_parameters depth n args in
+          let rarg = project_nth_arg m rargs in
+          kni info tab rarg s
         | (_,args,s) -> (m,args@s))
      else (m,stk)
   | FCoFix _ when red_set info.i_flags fCOFIX ->
@@ -985,8 +1079,14 @@ let rec zip_term zfun m stk =
         zip_term zfun t s
     | Zproj(_,_,p)::s ->
         let t = mkProj (Projection.make p true, m) in
-	zip_term zfun t s
+        zip_term zfun t s
     | Zfix(fx,par)::s ->
+        let h = mkApp(zip_term zfun (zfun fx) par,[|m|]) in
+        zip_term zfun h s
+    | ZK(fx,par)::s ->
+        let h = mkApp(zip_term zfun (zfun fx) par,[|m|]) in
+        zip_term zfun h s
+    | Zrew(fx,_, par)::s ->
         let h = mkApp(zip_term zfun (zfun fx) par,[|m|]) in
         zip_term zfun h s
     | Zshift(n)::s ->
